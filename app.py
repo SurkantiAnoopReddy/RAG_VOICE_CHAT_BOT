@@ -50,6 +50,7 @@ def initialize_session_state() -> None:
         "last_sources": [],
         "last_tts_warning": "",
         "autoplayed_audio_token": "",
+        "last_error_details": "",
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -173,6 +174,7 @@ def process_documents(uploaded_files) -> None:
         "chunks": len(chunked_documents),
         "cached": False,
     }
+    st.session_state.last_error_details = ""
 
 
 def run_voice_rag(audio_file) -> None:
@@ -237,6 +239,7 @@ def run_voice_rag(audio_file) -> None:
     st.session_state.last_audio_token = str(uuid.uuid4()) if audio_response_path else ""
     st.session_state.last_sources = reranked_documents
     st.session_state.last_tts_warning = tts_warning
+    st.session_state.last_error_details = ""
 
 
 def inject_global_styles() -> None:
@@ -730,6 +733,20 @@ def format_user_error(exc: Exception) -> str:
         return "That audio file format is not supported."
     if "No extractable text" in message:
         return "The uploaded PDFs did not contain extractable text."
+    if "ffmpeg" in message.lower():
+        return "FFmpeg is not available in the deployment environment. Make sure `packages.txt` contains `ffmpeg` and redeploy."
+    if "espeak" in message.lower():
+        return "The deployment is missing the eSpeak backend required by Coqui. Make sure `packages.txt` contains `espeak-ng` and redeploy."
+    if "pyttsx3 fallback is currently configured only for Windows" in message:
+        return "The app is trying to use the Windows-only TTS fallback in Linux. In Streamlit Cloud secrets, set `TTS_BACKEND=\"coqui\"`."
+    if "model 'rerank-v4.0' not found" in message or "rerank-v4.0" in message:
+        return "The Cohere rerank model configured in Streamlit secrets is invalid. Set `COHERE_RERANK_MODEL` to `rerank-v4.0-fast` or `rerank-v3.5` and redeploy."
+    if "cohere" in message.lower() and "not found" in message.lower():
+        return "The Cohere rerank request failed. Recheck your `COHERE_RERANK_MODEL` and Cohere API key in Streamlit secrets."
+    if "torchcodec" in message.lower():
+        return "The deployment hit a TorchCodec dependency issue. Rebuild the app after pushing the pinned requirements and redeploy with Python 3.12."
+    if "No module named" in message:
+        return "A required Python package is missing in the deployed environment. Rebuild the Streamlit app so it reinstalls the updated requirements."
     return "Something went wrong while generating the response. Please try again."
 
 
@@ -808,6 +825,7 @@ def main() -> None:
                     st.success(cache_note)
                 except Exception as exc:
                     LOGGER.exception("Document processing failed.")
+                    st.session_state.last_error_details = str(exc)
                     st.error(format_user_error(exc))
 
         if st.session_state.document_stats:
@@ -839,6 +857,7 @@ def main() -> None:
                     st.success("Answer generated successfully.")
                 except Exception as exc:
                     LOGGER.exception("Voice RAG pipeline failed.")
+                    st.session_state.last_error_details = str(exc)
                     st.error(format_user_error(exc))
 
         st.markdown("</div>", unsafe_allow_html=True)
@@ -860,6 +879,10 @@ def main() -> None:
 
     if st.session_state.last_sources:
         render_source_documents(st.session_state.last_sources)
+
+    if st.session_state.last_error_details:
+        with st.expander("Technical details", expanded=False):
+            st.code(st.session_state.last_error_details)
 
 
 if __name__ == "__main__":
